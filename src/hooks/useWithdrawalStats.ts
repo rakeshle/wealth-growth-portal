@@ -1,4 +1,3 @@
-
 import { useState, useEffect } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { User, WithdrawalStats } from '@/types';
@@ -15,6 +14,7 @@ export function useWithdrawalStats(user: User | null) {
   });
 
   const [isLoading, setIsLoading] = useState(false);
+  const [isWithdrawing, setIsWithdrawing] = useState(false);
 
   const fetchStats = async () => {
     if (!user) return;
@@ -22,45 +22,25 @@ export function useWithdrawalStats(user: User | null) {
     try {
       setIsLoading(true);
 
-      // Get user's current profile data
       const { data: profile, error: profileError } = await supabase
         .from('profiles')
         .select('balance, total_invested, referral_bonus, escrowed_amount, total_withdrawn')
         .eq('id', user.id)
         .single();
 
-      if (profileError) {
-        throw profileError;
-      }
+      if (profileError) throw profileError;
 
-      // Get pending withdrawals
       const { data: pendingWithdrawals, error: withdrawalsError } = await supabase
         .from('withdrawal_requests')
         .select('amount')
         .eq('user_id', user.id)
         .eq('status', 'pending');
 
-      if (withdrawalsError) {
-        throw withdrawalsError;
-      }
+      if (withdrawalsError) throw withdrawalsError;
 
       const pendingAmount = pendingWithdrawals?.reduce((sum, w) => sum + (w.amount || 0), 0) || 0;
-
-      // Calculate profit amount: current balance minus total invested
-      // This represents the actual profit earned from investments
       const profitAmount = Math.max(0, (profile.balance || 0) - (profile.total_invested || 0));
-      
-      // Available withdrawal is profit + referral bonus minus escrowed amount
       const availableWithdrawal = profitAmount + (profile.referral_bonus || 0) - (profile.escrowed_amount || 0);
-
-      console.log('Withdrawal stats calculation:', {
-        balance: profile.balance,
-        totalInvested: profile.total_invested,
-        calculatedProfit: profitAmount,
-        referralBonus: profile.referral_bonus,
-        escrowedAmount: profile.escrowed_amount,
-        availableWithdrawal
-      });
 
       setStats({
         availableWithdrawal: Math.max(0, availableWithdrawal),
@@ -78,35 +58,57 @@ export function useWithdrawalStats(user: User | null) {
     }
   };
 
+  const withdraw = async () => {
+    if (!user) return;
+    if (stats.availableWithdrawal <= 0) {
+      toast.error('No available balance to withdraw');
+      return;
+    }
+
+    try {
+      setIsWithdrawing(true);
+
+      const { error } = await supabase.from('withdrawal_requests').insert([
+        {
+          user_id: user.id,
+          amount: stats.availableWithdrawal,
+          status: 'pending',
+        },
+      ]);
+
+      if (error) throw error;
+
+      toast.success('Withdrawal request submitted');
+      fetchStats();
+    } catch (error: any) {
+      console.error('Withdrawal error:', error.message);
+      toast.error('Failed to submit withdrawal');
+    } finally {
+      setIsWithdrawing(false);
+    }
+  };
+
   useEffect(() => {
     fetchStats();
 
     if (user) {
       const channel = supabase
         .channel('withdrawal-stats-changes')
-        .on(
-          'postgres_changes',
-          {
+        .on('postgres_changes', {
             event: '*',
             schema: 'public',
             table: 'withdrawal_requests',
             filter: `user_id=eq.${user.id}`,
           },
-          () => {
-            fetchStats();
-          }
+          fetchStats
         )
-        .on(
-          'postgres_changes',
-          {
+        .on('postgres_changes', {
             event: '*',
             schema: 'public',
             table: 'profiles',
             filter: `id=eq.${user.id}`,
           },
-          () => {
-            fetchStats();
-          }
+          fetchStats
         )
         .subscribe();
 
@@ -116,5 +118,11 @@ export function useWithdrawalStats(user: User | null) {
     }
   }, [user]);
 
-  return { stats, isLoading, refetch: fetchStats };
+  return {
+    stats,
+    isLoading,
+    isWithdrawing,
+    refetch: fetchStats,
+    withdraw,
+  };
 }
