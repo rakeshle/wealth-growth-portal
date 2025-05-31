@@ -80,7 +80,7 @@ const Dashboard = () => {
           <StatCard
             title="Available Balance"
             value={`$${Number(user.balance || 0).toFixed(2)}`}
-            description="Ready to invest"
+            description="cannot be withdrawn before investing, invest now!"
             icon={<Wallet className="h-5 w-5 text-primary" />}
             onAction={() => navigate("/transactions")}
           />
